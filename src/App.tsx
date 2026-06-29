@@ -6,7 +6,7 @@ import {
   User, MapPin, Mail, Phone, ExternalLink, Trash, 
   Edit3, AlertCircle, ThumbsUp, Check, Activity, 
   Settings, HelpCircle, CheckCircle2, XCircle, Clock,
-  ChevronRight, RefreshCw, Star, Info
+  ChevronRight, RefreshCw, Star, Info, Calendar
 } from 'lucide-react';
 
 import { Profile, Job, Candidate, Application, Interview, Evaluation } from './types';
@@ -385,6 +385,14 @@ export default function App() {
   const [isAutoScheduleOpen, setIsAutoScheduleOpen] = useState(false);
   const [isImportingExcel, setIsImportingExcel] = useState(false);
   const [excelImportProgress, setExcelImportProgress] = useState(0);
+
+  // Individual Schedule state
+  const [isIndivScheduleOpen, setIsIndivScheduleOpen] = useState(false);
+  const [indivCandidateId, setIndivCandidateId] = useState('');
+  const [indivDate, setIndivDate] = useState('2026-06-30');
+  const [indivTime, setIndivTime] = useState('13:00');
+  const [indivDuration, setIndivDuration] = useState(45);
+  const [indivRoom, setIndivRoom] = useState('Room A');
 
   // Manual interview rescheduled helper states
   const [editingInterviewId, setEditingInterviewId] = useState<string | null>(null);
@@ -796,6 +804,20 @@ export default function App() {
     const sanitizedPhone = sanitizeInput(newCandidatePhone.trim());
     const sanitizedResumeUrl = sanitizeInput(newCandidateResumeUrl.trim());
     const trimmedPhone = sanitizedPhone;
+    
+    // Fallback if no target job is selected
+    let targetJobId = newCandidateTargetJobId;
+    if (!targetJobId && jobs.length > 0) {
+      const seenTitles = new Set<string>();
+      const uniqueJobsByTitle = jobs.filter(j => {
+        if (!j.title) return false;
+        if (seenTitles.has(j.title.trim())) return false;
+        seenTitles.add(j.title.trim());
+        return true;
+      });
+      targetJobId = uniqueJobsByTitle[0]?.id || jobs[0]?.id || '';
+    }
+
     const cId = generateUUID();
     const mCode = generateMagicCode();
     
@@ -815,7 +837,7 @@ export default function App() {
     const newApp: Application = {
       id: appId,
       candidate_id: cId,
-      job_id: newCandidateTargetJobId,
+      job_id: targetJobId,
       status: 'New',
       applied_date: new Date().toISOString().split('T')[0],
       notes: 'تم تسجيل المرشح يدوياً عبر لوحة التحكم الأساسية.',
@@ -846,7 +868,7 @@ export default function App() {
             .from('applications')
             .select('*')
             .eq('candidate_id', dbCand.id)
-            .eq('job_id', newCandidateTargetJobId);
+            .eq('job_id', targetJobId);
 
           if (findAppErr) {
             showToast(`فشل التحقق من طلبات التقديم: ${findAppErr.message}`, 'error');
@@ -865,7 +887,7 @@ export default function App() {
 
           // Create application payload
           const supabaseAppPayload = {
-            job_id: newCandidateTargetJobId,
+            job_id: targetJobId,
             candidate_id: finalCand.id,
             source: newCandidateSource
           };
@@ -898,12 +920,13 @@ export default function App() {
           showToast('تم ربط المرشح الموجود بالوظيفة بنجاح! ✅', 'success');
 
         } else {
-          // Candidate does not exist. Insert candidate
+          // Candidate does not exist. Insert candidate with source populated
           const supabaseCandPayload = {
             name: sanitizedName,
             phone: trimmedPhone,
             resume_url: sanitizedResumeUrl || null,
-            magic_code: mCode
+            magic_code: mCode,
+            source: newCandidateSource
           };
 
           const { data: insertedCands, error: candErr } = await supabase
@@ -922,7 +945,7 @@ export default function App() {
           }
 
           const supabaseAppPayload = {
-            job_id: newCandidateTargetJobId,
+            job_id: targetJobId,
             candidate_id: finalCand.id,
             source: newCandidateSource
           };
@@ -957,7 +980,7 @@ export default function App() {
       // Local simulated state
       const localExistingCand = candidates.find(c => c.phone.trim() === trimmedPhone);
       if (localExistingCand) {
-        const localExistingApp = applications.find(a => a.candidate_id === localExistingCand.id && a.job_id === newCandidateTargetJobId);
+        const localExistingApp = applications.find(a => a.candidate_id === localExistingCand.id && a.job_id === targetJobId);
         if (localExistingApp) {
           showToast('المرشح مضاف بالفعل لهذه الوظيفة ومسجل في النظام بنجاح! ✅', 'success');
           handleCloseAddCandidate();
@@ -968,7 +991,7 @@ export default function App() {
         const localApp: Application = {
           id: generateUUID(),
           candidate_id: localExistingCand.id,
-          job_id: newCandidateTargetJobId,
+          job_id: targetJobId,
           status: 'New',
           applied_date: new Date().toISOString().split('T')[0],
           notes: 'تم تسجيل تقديم المرشح الموجود على وظيفة جديدة يدوياً.',
@@ -1101,6 +1124,71 @@ export default function App() {
 
     setInterviews([finalInt, ...interviews]);
     setIsScheduleInterviewOpen(false);
+  };
+
+  // Handle individual schedule submit
+  const handleIndividualScheduleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!indivCandidateId) return;
+
+    const candidateApp = applications.find(a => a.candidate_id === indivCandidateId);
+    if (!candidateApp) {
+      showToast('هذا المرشح ليس لديه طلب تقديم فعال لجدولته!', 'error');
+      return;
+    }
+
+    const newIntId = generateUUID();
+    const newInt: Interview = {
+      id: newIntId,
+      application_id: candidateApp.id,
+      date: indivDate,
+      time: indivTime,
+      duration: Number(indivDuration),
+      status: 'Scheduled',
+      type: 'Technical',
+      room_number: indivRoom,
+      meeting_link: `https://meet.google.com/meet-${Math.random().toString(36).substring(2, 5)}-${Math.random().toString(36).substring(2, 6)}`,
+      whatsapp_link_sent: false,
+      waiting_room_status: 'Not Joined'
+    };
+
+    let finalInt = newInt;
+    if (isSupabaseConfigured()) {
+      const { id, ...supabaseIntPayload } = newInt;
+      // 1. Insert interview
+      const { data: insertedInts, error: intErr } = await supabase
+        .from('interviews')
+        .insert([supabaseIntPayload])
+        .select();
+
+      if (intErr) {
+        showToast(`فشل جدولة المقابلة في قاعدة البيانات: ${intErr.message}`, 'error');
+        return;
+      } else {
+        if (insertedInts && insertedInts[0]) {
+          finalInt = insertedInts[0];
+        }
+      }
+
+      // 2. Update application status to 'Interviewing'
+      const { error: appErr } = await supabase
+        .from('applications')
+        .update({ status: 'Interviewing' })
+        .eq('id', candidateApp.id);
+      
+      if (appErr) {
+        console.error('Failed to update application status in Supabase:', appErr);
+      } else {
+        showToast('تمت جدولة المقابلة وتحديث حالة المرشح بنجاح! ✅', 'success');
+      }
+    } else {
+      showToast('تمت الجدولة بنجاح (وضع المحاكاة)! ✅', 'success');
+    }
+
+    // Optimistic UI updates
+    setInterviews([finalInt, ...interviews]);
+    setApplications(prev => prev.map(a => a.id === candidateApp.id ? { ...a, status: 'Interviewing' } : a));
+    setIsIndivScheduleOpen(false);
   };
 
   // Delete Job
@@ -2162,6 +2250,7 @@ export default function App() {
                         <thead>
                           <tr className="bg-slate-50/80 text-slate-400 text-[10px] font-bold uppercase tracking-wider border-b border-slate-200">
                             <th className="p-4">المرشح والمعلومات</th>
+                            <th className="p-4">رمز الدخول (PIN)</th>
                             <th className="p-4">الوظيفة المتقدم لها</th>
                             <th className="p-4">المصدر</th>
                             <th className="p-4">حالة الطلب</th>
@@ -2172,20 +2261,22 @@ export default function App() {
                           {candidates
                             .filter(candidate => {
                               const searchLower = candidateSearch.toLowerCase();
-                              return candidate.name.toLowerCase().includes(searchLower) ||
-                                     candidate.source.toLowerCase().includes(searchLower) ||
-                                     candidate.phone.includes(searchLower);
+                              const nameMatch = (candidate.name || '').toLowerCase().includes(searchLower);
+                              const sourceMatch = (candidate.source || '').toLowerCase().includes(searchLower);
+                              const phoneMatch = (candidate.phone || '').includes(searchLower);
+                              return nameMatch || sourceMatch || phoneMatch;
                             })
                             .map(candidate => {
                               const candidateApp = applications.find(a => a.candidate_id === candidate.id);
                               const targetJob = jobs.find(j => j.id === candidateApp?.job_id);
+                              const resolvedSource = candidate.source || candidateApp?.source || 'LinkedIn';
 
                               return (
                                 <tr key={candidate.id} className="hover:bg-slate-50/50 transition-colors duration-150 text-xs text-slate-700">
                                   <td className="p-4">
                                     <div className="flex items-center gap-3">
                                       <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-sky-400 to-sky-600 text-white font-bold flex items-center justify-center">
-                                        {candidate.name.substring(0, 2)}
+                                        {(candidate.name || '').substring(0, 2)}
                                       </div>
                                       <div>
                                         <p className="font-bold text-slate-800">{candidate.name}</p>
@@ -2202,10 +2293,15 @@ export default function App() {
                                     </div>
                                   </td>
                                   <td className="p-4">
+                                    <div className="font-mono bg-sky-50 text-sky-700 font-bold text-xs px-2.5 py-1 rounded-lg inline-block select-all cursor-pointer border border-sky-100" title="رمز دخول المرشح - انقر للتحديد">
+                                      {candidate.magic_code || '------'}
+                                    </div>
+                                  </td>
+                                  <td className="p-4">
                                     <p className="font-semibold text-slate-800">{targetJob?.title || 'غير محددة'}</p>
                                     <p className="text-[10px] text-slate-400 mt-0.5">{targetJob?.department}</p>
                                   </td>
-                                  <td className="p-4 text-slate-500 font-semibold">{candidate.source}</td>
+                                  <td className="p-4 text-slate-500 font-semibold">{resolvedSource}</td>
                                   <td className="p-4">
                                     <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
                                       candidateApp?.status === 'New' 
@@ -2224,6 +2320,7 @@ export default function App() {
                                       {candidateApp?.status === 'Offered' && 'مقدم له عرض'}
                                       {candidateApp?.status === 'Rejected' && 'مستبعد'}
                                       {candidateApp?.status === 'Hired' && 'تم التعيين'}
+                                      {!candidateApp && 'بدون طلب تقديم'}
                                     </span>
                                   </td>
                                   <td className="p-4 text-left">
@@ -3244,6 +3341,18 @@ export default function App() {
               </div>
 
               <form onSubmit={handleUpdateCandidate} className="space-y-4">
+                {editingCandidate?.magic_code && (
+                  <div className="bg-sky-50 border border-sky-100 p-3.5 rounded-2xl flex items-center justify-between text-right">
+                    <div>
+                      <span className="text-[10px] font-bold text-sky-800 block">رمز الدخول الخاص بالمرشح (PIN)</span>
+                      <p className="text-[10px] text-slate-500 mt-0.5">يمكن للمرشح الدخول لبوابته الخاصة باستخدام هذا الرمز</p>
+                    </div>
+                    <code className="px-3 py-1.5 bg-white border border-sky-200 text-sky-700 font-mono text-xs font-bold rounded-xl select-all cursor-pointer" title="انقر لتحديد الرمز">
+                      {editingCandidate.magic_code}
+                    </code>
+                  </div>
+                )}
+
                 <div>
                   <label className="text-xs font-bold text-slate-500 block mb-1">الاسم الكامل للمرشح</label>
                   <input 
