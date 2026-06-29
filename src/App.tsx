@@ -126,6 +126,12 @@ export default function App() {
 
   useEffect(() => {
     fetchAllData();
+    const params = new URLSearchParams(window.location.search);
+    const candIdFromUrl = params.get('candidate_id');
+    if (candIdFromUrl) {
+      setActivePortal('candidate');
+      setSelectedCandidateId(candIdFromUrl);
+    }
   }, []);
   
   // --- CURRENT ACTIVE USER ---
@@ -755,7 +761,7 @@ export default function App() {
     setEvalRecommendation('Hire');
   };
 
-  // Send Hybrid WhatsApp simulated message
+  // Send Hybrid WhatsApp real message
   const triggerSendWhatsApp = (interviewId: string) => {
     const interview = interviews.find(i => i.id === interviewId);
     if (!interview) return;
@@ -764,18 +770,24 @@ export default function App() {
     const job = jobs.find(j => j.id === app?.job_id);
 
     if (candidate) {
-      // Dynamic simulated link representing Hybrid WhatsApp link to access Candidate Portal directly
       const customPortalLink = `${window.location.origin}/?candidate_id=${candidate.id}`;
+      const jobTitle = job?.title || 'الوظيفة';
+      const timeStr = `${interview.date} - ${interview.time}`;
+      const message = renderWhatsAppMessage('invite', candidate.name, jobTitle, timeStr, customPortalLink);
       
-      setWhatsAppModalData({
-        candidateName: candidate.name,
-        phone: candidate.phone,
-        link: customPortalLink
-      });
-      setShowWhatsAppModal(true);
+      const cleanPhone = candidate.phone.replace(/[\s+()-]/g, '');
+      const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+      
+      window.open(whatsappUrl, '_blank');
 
       // Set that link was sent successfully
+      if (isSupabaseConfigured()) {
+        supabase.from('interviews').update({ whatsapp_link_sent: true }).eq('id', interviewId).then(({ error }) => {
+          if (error) console.error('Failed to sync WhatsApp link sent status to Supabase:', error);
+        });
+      }
       setInterviews(interviews.map(i => i.id === interviewId ? { ...i, whatsapp_link_sent: true } : i));
+      showToast('تم فتح محادثة الواتساب بنجاح وإرسال الرابط الهجين للمرشح! ✅', 'success');
     }
   };
 
@@ -839,15 +851,10 @@ export default function App() {
             <div className="flex items-center gap-2">
               <span className="text-xl font-bold text-sky-800 tracking-tight">ApplyWell</span>
               <span className="text-xs bg-sky-100 text-sky-800 font-bold px-2 py-0.5 rounded-full">Pro</span>
-              {isSupabaseConfigured() ? (
+              {isSupabaseConfigured() && (
                 <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                   قاعدة Supabase حية ومتصلة 🟢
-                </span>
-              ) : (
-                <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                  محاكي محلي نشط 🟡
                 </span>
               )}
             </div>
@@ -1592,15 +1599,11 @@ export default function App() {
                                       <button 
                                         onClick={() => {
                                           const customPortalLink = `${window.location.origin}/?candidate_id=${candidate.id}`;
-                                          setWhatsAppModalData({
-                                            candidateName: candidate.name,
-                                            phone: candidate.phone,
-                                            link: customPortalLink,
-                                            jobTitle: targetJob?.title || 'مطور واجهات أول',
-                                            time: 'غداً الساعة 10:00 ص'
-                                          });
-                                          setSelectedTemplateType('invite');
-                                          setShowWhatsAppModal(true);
+                                          const jobTitle = targetJob?.title || 'الوظيفة';
+                                          const message = renderWhatsAppMessage('invite', candidate.name, jobTitle, 'غداً الساعة 10:00 ص', customPortalLink);
+                                          const cleanPhone = candidate.phone.replace(/[\s+()-]/g, '');
+                                          window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`, '_blank');
+                                          showToast('تم فتح محادثة الواتساب بنجاح وإرسال الرابط الهجين للمرشح! ✅', 'success');
                                         }}
                                         className="p-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors duration-150 flex items-center gap-1 font-bold text-[10px]"
                                         title="تواصل واتساب"
@@ -1770,16 +1773,13 @@ export default function App() {
                               <button
                                 onClick={() => {
                                   const customPortalLink = `${window.location.origin}/?candidate_id=${candidate.id}`;
-                                  setWhatsAppModalData({
-                                    candidateName: candidate.name,
-                                    phone: candidate.phone,
-                                    link: customPortalLink,
-                                    jobTitle: job?.title || 'مطور واجهات أول',
-                                    time: `${interview.date} في تمام الساعة ${interview.time}`
-                                  });
-                                  setSelectedTemplateType('reschedule');
-                                  setShowWhatsAppModal(true);
+                                  const jobTitle = job?.title || 'الوظيفة';
+                                  const timeStr = `${interview.date} في تمام الساعة ${interview.time}`;
+                                  const message = renderWhatsAppMessage('reschedule', candidate.name, jobTitle, timeStr, customPortalLink);
+                                  const cleanPhone = candidate.phone.replace(/[\s+()-]/g, '');
+                                  window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`, '_blank');
                                   setRescheduleNotifId(null);
+                                  showToast('تم فتح محادثة الواتساب بنجاح وإرسال الرابط الهجين للمرشح! ✅', 'success');
                                 }}
                                 className="w-full mb-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold rounded-xl shadow-md transition-all duration-200 flex items-center justify-center gap-1.5 animate-bounce"
                               >
@@ -1973,7 +1973,7 @@ export default function App() {
         {/* =============== CANDIDATE PORTAL VIEW =============== */}
         {/* ========================================================================= */}
         {activePortal === 'candidate' && (
-          <div className="flex-1 p-6 overflow-y-auto w-full bg-slate-100/30">
+          <div className="flex-1 overflow-y-auto w-full">
             <CandidatePortalSimulator 
               candidates={candidates}
               applications={applications}
@@ -1983,6 +1983,8 @@ export default function App() {
               setApplications={setApplications}
               candidateMessages={candidateMessages}
               setCandidateMessages={setCandidateMessages}
+              selectedCandidateId={selectedCandidateId}
+              onBackToAdmin={() => setActivePortal('admin')}
             />
           </div>
         )}
@@ -2665,72 +2667,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* 5. WHATSAPP LINK HYBRID MODAL SIMULATION */}
-      <AnimatePresence>
-        {showWhatsAppModal && whatsAppModalData && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-[2.5rem] p-6 max-w-md w-full shadow-2xl border border-slate-100 text-right"
-            >
-              <div className="flex justify-between items-center mb-4 pb-2 border-b border-slate-100">
-                <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                  <Smartphone className="w-5 h-5 text-emerald-600" />
-                  رصد إرسال الرابط الهجين (واتساب)
-                </h4>
-                <button 
-                  onClick={() => setShowWhatsAppModal(false)}
-                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 text-xs"
-                >
-                  ✕
-                </button>
-              </div>
 
-              {/* SIMULATED PHONE VIEW */}
-              <div className="bg-[#e5ddd5] p-4 rounded-3xl border border-slate-200 max-h-[340px] overflow-y-auto mb-4 relative">
-                <div className="bg-emerald-600 text-white text-[10px] py-1 px-3 rounded-full text-center mb-3">
-                  محادثة مشفرة مع {whatsAppModalData.candidateName}
-                </div>
-
-                <div className="bg-white p-3 rounded-2xl text-xs text-slate-800 max-w-[90%] mr-auto rounded-tr-none shadow-sm leading-relaxed">
-                  <p className="font-semibold text-slate-900 mb-1">أهلاً {whatsAppModalData.candidateName}،</p>
-                  <p>تم تحديد موعد مقابلتك الفنية في منصة ApplyWell Pro للتوظيف الرشيق.</p>
-                  <p className="mt-2 text-sky-700 underline break-all font-mono font-bold">
-                    {whatsAppModalData.link}
-                  </p>
-                  <p className="mt-2 text-slate-400 text-[10px]">الرجاء عدم مشاركة هذا الرابط مع أي شخص آخر حفاظاً على أمان بياناتك.</p>
-                </div>
-              </div>
-
-              <div className="p-3.5 bg-emerald-50 rounded-2xl text-emerald-800 text-[11px] leading-relaxed mb-4">
-                ✅ <strong>تم الإرسال بنجاح!</strong> لقد قمنا بتهيئة رابط مشفر وآمن يمكن للمرشح فتحه مباشرة للولوج لساحة الانتظار الرقمية.
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(whatsAppModalData.link);
-                    // Open candidate portal view automatically for quick test feel
-                    setActivePortal('candidate');
-                    setShowWhatsAppModal(false);
-                  }}
-                  className="flex-1 py-2 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl shadow transition-colors"
-                >
-                  نسخ الرابط والذهاب لبوابة المرشح
-                </button>
-                <button
-                  onClick={() => setShowWhatsAppModal(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-bold rounded-xl transition-colors"
-                >
-                  إغلاق
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
     </div>
   );
