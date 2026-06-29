@@ -3,7 +3,7 @@ import {
   Smartphone, Clock, Video, CheckCircle2, MessageSquare, Send, 
   Sparkles, Star, RefreshCw, Eye, Check, X, AlertCircle, Phone, Mail, 
   MapPin, HelpCircle, ChevronLeft, Calendar, BellRing, ArrowLeft, Camera,
-  Briefcase, Award, CheckCircle, Info
+  Briefcase, Award, CheckCircle, Info, LogOut
 } from 'lucide-react';
 import { Candidate, Application, Interview, Job } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -19,6 +19,7 @@ interface CandidatePortalSimulatorProps {
   setCandidateMessages: React.Dispatch<React.SetStateAction<{ [candidateId: string]: { sender: 'candidate' | 'bot'; text: string; time: string }[] }>>;
   selectedCandidateId?: string;
   onBackToAdmin?: () => void;
+  onLogout?: () => void;
 }
 
 export default function CandidatePortalSimulator({
@@ -31,7 +32,8 @@ export default function CandidatePortalSimulator({
   candidateMessages,
   setCandidateMessages,
   selectedCandidateId,
-  onBackToAdmin
+  onBackToAdmin,
+  onLogout
 }: CandidatePortalSimulatorProps) {
   
   // Resolve active candidate
@@ -212,6 +214,16 @@ export default function CandidatePortalSimulator({
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
                 لوحة الإدارة
+              </button>
+            )}
+
+            {onLogout && (
+              <button 
+                onClick={onLogout}
+                className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-[10px] font-bold flex items-center gap-1 border border-rose-100"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                خروج المرشح 🚪
               </button>
             )}
           </div>

@@ -234,29 +234,36 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const candIdFromUrl = params.get('candidate_id');
     const magicCodeFromUrl = params.get('c');
-    const activeIdentifier = magicCodeFromUrl || candIdFromUrl;
+    const storedCandId = localStorage.getItem('candidate_logged_in_id');
+    const storedMagicCode = localStorage.getItem('candidate_magic_code');
+    const activeIdentifier = magicCodeFromUrl || candIdFromUrl || storedMagicCode || storedCandId;
 
     if (activeIdentifier) {
       setActivePortal('candidate');
       if (candIdFromUrl) {
         setSelectedCandidateId(candIdFromUrl);
+      } else if (storedCandId) {
+        setSelectedCandidateId(storedCandId);
       }
       fetchCandidatePortalData(activeIdentifier);
     }
 
     if (isSupabaseConfigured()) {
+      // 1. Direct fetch SELECT from Supabase to hydrate state immediately on mount (State Hydration & Persistence)
+      fetchAllData(true);
+
       supabase.auth.getSession().then(({ data: { session } }) => {
         setUser(session?.user ?? null);
         setAuthLoading(false);
-        if (session?.user && !activeIdentifier) {
-          fetchAllData();
+        if (session?.user) {
+          fetchAllData(false);
         }
       });
 
       const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
         setUser(session?.user ?? null);
         setAuthLoading(false);
-        if (session?.user && !activeIdentifier) {
+        if (session?.user) {
           fetchAllData(true);
         }
       });
@@ -264,9 +271,7 @@ export default function App() {
       return () => subscription.unsubscribe();
     } else {
       setAuthLoading(false);
-      if (!activeIdentifier) {
-        fetchAllData();
-      }
+      fetchAllData();
     }
   }, []);
 
@@ -295,6 +300,9 @@ export default function App() {
   // --- UI NAVIGATION & ROUTING ---
   // "admin" for Admin Console, "candidate" for Candidate Portal
   const [activePortal, setActivePortal] = useState<'admin' | 'candidate'>('admin');
+  const [loginType, setLoginType] = useState<'candidate' | 'admin'>('candidate');
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState('');
   const [adminTab, setAdminTab] = useState<'dashboard' | 'jobs' | 'candidates' | 'interviews' | 'evaluations'>('dashboard');
   
   // For selecting which candidate perspective to preview inside the Candidate Portal
@@ -555,6 +563,56 @@ export default function App() {
     }
   };
 
+  const handlePinLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanPin = pinInput.trim().toUpperCase();
+    if (cleanPin.length !== 6) {
+      setPinError('رمز الدخول يجب أن يتكون من 6 خانات (أرقام وحروف)');
+      return;
+    }
+    setPinError('');
+    setDbLoading(true);
+    try {
+      if (isSupabaseConfigured()) {
+        const { data, error } = await supabase
+          .from('candidates')
+          .select('*')
+          .eq('magic_code', cleanPin);
+        
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          const cand = data[0];
+          localStorage.setItem('candidate_logged_in_id', cand.id);
+          localStorage.setItem('candidate_magic_code', cand.magic_code || '');
+          setSelectedCandidateId(cand.id);
+          setActivePortal('candidate');
+          await fetchCandidatePortalData(cand.id);
+          showToast('تم تسجيل الدخول بنجاح! مرحبا بك في بوابتك الخاصة ✅', 'success');
+        } else {
+          setPinError('رمز الدخول غير صحيح، يرجى المحاولة مرة أخرى');
+        }
+      } else {
+        // Mock environment fallback
+        const cand = candidates.find(c => c.magic_code?.toUpperCase() === cleanPin);
+        if (cand) {
+          localStorage.setItem('candidate_logged_in_id', cand.id);
+          localStorage.setItem('candidate_magic_code', cand.magic_code || '');
+          setSelectedCandidateId(cand.id);
+          setActivePortal('candidate');
+          showToast('تم تسجيل الدخول بنجاح! (وضع المحاكاة) ✅', 'success');
+        } else {
+          setPinError('رمز الدخول غير صحيح، يرجى المحاولة مرة أخرى');
+        }
+      }
+    } catch (err: any) {
+      console.error(err);
+      setPinError(`حدث خطأ أثناء التحقق: ${err.message}`);
+    } finally {
+      setDbLoading(false);
+    }
+  };
+
   const handleLogout = async () => {
     if (isSupabaseConfigured()) {
       await supabase.auth.signOut();
@@ -562,6 +620,16 @@ export default function App() {
       setUser(null);
     }
     showToast('تم تسجيل الخروج بنجاح.', 'success');
+  };
+
+  const handleCandidateLogout = () => {
+    localStorage.removeItem('candidate_logged_in_id');
+    localStorage.removeItem('candidate_magic_code');
+    setSelectedCandidateId('');
+    setPinInput('');
+    setPinError('');
+    setActivePortal('admin');
+    showToast('تم تسجيل خروج المرشح بنجاح.', 'success');
   };
 
   // --- MODAL RESET & UX STATE HELPERS ---
@@ -1191,10 +1259,13 @@ export default function App() {
     const job = jobs.find(j => j.id === app?.job_id);
 
     if (candidate) {
-      const customPortalLink = `https://hr-job.vercel.app/?c=${candidate.magic_code || candidate.id}`;
+      const customPortalLink = `https://hr-job.vercel.app`;
       const jobTitle = job?.title || 'الوظيفة';
       const timeStr = `${interview.date} - ${interview.time}`;
-      const message = renderWhatsAppMessage('invite', candidate.name, jobTitle, timeStr, customPortalLink);
+      let message = renderWhatsAppMessage('invite', candidate.name, jobTitle, timeStr, customPortalLink);
+      if (candidate.magic_code) {
+        message += `\nرمز الدخول الخاص بك هو: ${candidate.magic_code}`;
+      }
       
       const cleanPhone = candidate.phone.replace(/[\s+()-]/g, '');
       const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
@@ -1326,59 +1397,138 @@ export default function App() {
                 animate={{ scale: 1, opacity: 1 }}
                 className="bg-white rounded-[2.5rem] p-8 max-w-md w-full shadow-2xl border border-slate-100 text-right"
               >
-                <div className="text-center mb-6">
-                  <div className="w-12 h-12 bg-sky-50 rounded-2xl flex items-center justify-center mx-auto text-sky-600 mb-3 border border-sky-100">
-                    <Activity className="w-6 h-6" />
-                  </div>
-                  <h3 className="text-lg font-bold text-slate-800">بوابة إدارة التوظيف - ApplyWell Pro</h3>
-                  <p className="text-xs text-slate-500 mt-1">الرجاء تسجيل الدخول للوصول إلى لوحة المتابعة وإدارة المرشحين</p>
-                </div>
-
-                <form onSubmit={handleAuth} className="space-y-4">
+                {loginType === 'candidate' ? (
+                  /* ================= CANDIDATE PIN CODE LOGIN PORTAL ================= */
                   <div>
-                    <label className="text-xs font-bold text-slate-500 block mb-1">البريد الإلكتروني</label>
-                    <input 
-                      type="email" 
-                      required
-                      placeholder="admin@applywell.pro"
-                      value={authEmail}
-                      onChange={(e) => setAuthEmail(e.target.value)}
-                      className="w-full p-3 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-sky-500 text-right"
-                    />
-                  </div>
+                    <div className="text-center mb-6">
+                      <div className="w-12 h-12 bg-sky-50 rounded-2xl flex items-center justify-center mx-auto text-sky-600 mb-3 border border-sky-100">
+                        <Smartphone className="w-6 h-6 text-sky-600" />
+                      </div>
+                      <h3 className="text-lg font-bold text-slate-800">بوابة المرشحين - ApplyWell Pro</h3>
+                      <p className="text-xs text-slate-500 mt-1">الرجاء إدخال رمز الدخول الخاص بك للاطلاع على حالة طلبك ومواعيد مقابلاتك</p>
+                    </div>
 
+                    <form onSubmit={handlePinLogin} className="space-y-4">
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 block mb-1">أدخل رمز الدخول (المكون من 6 خانات)</label>
+                        <input 
+                          type="text" 
+                          required
+                          maxLength={6}
+                          placeholder="مثال: AB12CD"
+                          value={pinInput}
+                          onChange={(e) => {
+                            setPinInput(e.target.value);
+                            if (pinError) setPinError('');
+                          }}
+                          className="w-full p-4 text-center tracking-widest text-lg font-bold uppercase bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition-all duration-150"
+                        />
+                        {pinError && (
+                          <p className="text-xs text-rose-600 font-bold mt-2 text-right flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-600"></span>
+                            {pinError}
+                          </p>
+                        )}
+                      </div>
+
+                      <button 
+                        type="submit"
+                        className="w-full py-3.5 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl shadow-lg shadow-sky-600/20 transition-all duration-150 flex items-center justify-center gap-2"
+                      >
+                        {dbLoading ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          'دخول البوابة 🔑'
+                        )}
+                      </button>
+                    </form>
+
+                    <div className="mt-6 pt-5 border-t border-slate-100 text-center">
+                      <button 
+                        onClick={() => {
+                          setLoginType('admin');
+                          setPinError('');
+                        }}
+                        className="text-xs text-slate-500 hover:text-sky-600 hover:underline font-bold transition-colors"
+                      >
+                        تسجيل دخول المشرفين (لوحة الإدارة) 👥
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* ================= ADMIN CREDENTIALS LOGIN PORTAL ================= */
                   <div>
-                    <label className="text-xs font-bold text-slate-500 block mb-1">كلمة المرور</label>
-                    <input 
-                      type="password" 
-                      required
-                      placeholder="••••••••"
-                      value={authPassword}
-                      onChange={(e) => setAuthPassword(e.target.value)}
-                      className="w-full p-3 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-sky-500 text-right"
-                    />
-                  </div>
+                    <div className="text-center mb-6">
+                      <div className="w-12 h-12 bg-sky-50 rounded-2xl flex items-center justify-center mx-auto text-sky-600 mb-3 border border-sky-100">
+                        <Activity className="w-6 h-6 text-sky-600" />
+                      </div>
+                      <h3 className="text-lg font-bold text-slate-800">بوابة إدارة التوظيف - ApplyWell Pro</h3>
+                      <p className="text-xs text-slate-500 mt-1">الرجاء تسجيل الدخول للوصول إلى لوحة المتابعة وإدارة المرشحين</p>
+                    </div>
 
-                  <button 
-                    type="submit"
-                    className="w-full py-3 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl shadow-lg shadow-sky-600/20 transition-all duration-150"
-                  >
-                    {isSignUp ? 'إنشاء حساب جديد' : 'تسجيل الدخول'}
-                  </button>
-                </form>
+                    <form onSubmit={handleAuth} className="space-y-4">
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 block mb-1">البريد الإلكتروني</label>
+                        <input 
+                          type="email" 
+                          required
+                          placeholder="admin@applywell.pro"
+                          value={authEmail}
+                          onChange={(e) => setAuthEmail(e.target.value)}
+                          className="w-full p-3 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-sky-500 text-right"
+                        />
+                      </div>
 
-                <div className="mt-4 text-center">
-                  <button 
-                    onClick={() => setIsSignUp(!isSignUp)}
-                    className="text-xs text-sky-600 hover:underline font-semibold"
-                  >
-                    {isSignUp ? 'لديك حساب بالفعل؟ سجل دخولك' : 'ليس لديك حساب؟ أنشئ حساب جديد'}
-                  </button>
-                </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 block mb-1">كلمة المرور</label>
+                        <input 
+                          type="password" 
+                          required
+                          placeholder="••••••••"
+                          value={authPassword}
+                          onChange={(e) => setAuthPassword(e.target.value)}
+                          className="w-full p-3 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-sky-500 text-right"
+                        />
+                      </div>
 
-                {!isSupabaseConfigured() && (
-                  <div className="mt-6 p-3 bg-amber-50 rounded-2xl border border-amber-100 text-amber-800 text-[10px] text-center font-bold">
-                    ⚠️ وضع التطوير المحلي: يمكنك استخدام أي بريد وكلمة مرور لتسجيل الدخول مباشرة (Bypass)
+                      <button 
+                        type="submit"
+                        className="w-full py-3 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl shadow-lg shadow-sky-600/20 transition-all duration-150 flex items-center justify-center"
+                      >
+                        {dbLoading ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          isSignUp ? 'إنشاء حساب جديد' : 'تسجيل الدخول'
+                        )}
+                      </button>
+                    </form>
+
+                    <div className="mt-4 text-center">
+                      <button 
+                        onClick={() => setIsSignUp(!isSignUp)}
+                        className="text-xs text-sky-600 hover:underline font-semibold"
+                      >
+                        {isSignUp ? 'لديك حساب بالفعل؟ سجل دخولك' : 'ليس لديك حساب؟ أنشئ حساب جديد'}
+                      </button>
+                    </div>
+
+                    <div className="mt-6 pt-5 border-t border-slate-100 text-center">
+                      <button 
+                        onClick={() => {
+                          setLoginType('candidate');
+                          setPinError('');
+                        }}
+                        className="text-xs text-slate-500 hover:text-sky-600 hover:underline font-bold transition-colors"
+                      >
+                        الدخول كمرشح (بوابة المرشحين) 🔑
+                      </button>
+                    </div>
+
+                    {!isSupabaseConfigured() && (
+                      <div className="mt-6 p-3 bg-amber-50 rounded-2xl border border-amber-100 text-amber-800 text-[10px] text-center font-bold">
+                        ⚠️ وضع التطوير المحلي: يمكنك استخدام أي بريد وكلمة مرور لتسجيل الدخول مباشرة (Bypass)
+                      </div>
+                    )}
                   </div>
                 )}
               </motion.div>
@@ -2080,9 +2230,12 @@ export default function App() {
                                     <div className="flex items-center justify-end gap-1">
                                       <button 
                                         onClick={() => {
-                                          const customPortalLink = `https://hr-job.vercel.app/?c=${candidate.magic_code || candidate.id}`;
+                                          const customPortalLink = `https://hr-job.vercel.app`;
                                           const jobTitle = targetJob?.title || 'الوظيفة';
-                                          const message = renderWhatsAppMessage('invite', candidate.name, jobTitle, 'غداً الساعة 10:00 ص', customPortalLink);
+                                          let message = renderWhatsAppMessage('invite', candidate.name, jobTitle, 'غداً الساعة 10:00 ص', customPortalLink);
+                                          if (candidate.magic_code) {
+                                            message += `\nرمز الدخول الخاص بك هو: ${candidate.magic_code}`;
+                                          }
                                           const cleanPhone = candidate.phone.replace(/[\s+()-]/g, '');
                                           window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`, '_blank');
                                           showToast('تم فتح محادثة الواتساب بنجاح وإرسال الرابط الهجين للمرشح! ✅', 'success');
@@ -2261,10 +2414,13 @@ export default function App() {
                             {rescheduleNotifId === interview.id && (
                               <button
                                 onClick={() => {
-                                  const customPortalLink = `https://hr-job.vercel.app/?c=${candidate.magic_code || candidate.id}`;
+                                  const customPortalLink = `https://hr-job.vercel.app`;
                                   const jobTitle = job?.title || 'الوظيفة';
                                   const timeStr = `${interview.date} في تمام الساعة ${interview.time}`;
-                                  const message = renderWhatsAppMessage('reschedule', candidate.name, jobTitle, timeStr, customPortalLink);
+                                  let message = renderWhatsAppMessage('reschedule', candidate.name, jobTitle, timeStr, customPortalLink);
+                                  if (candidate.magic_code) {
+                                    message += `\nرمز الدخول الخاص بك هو: ${candidate.magic_code}`;
+                                  }
                                   const cleanPhone = candidate.phone.replace(/[\s+()-]/g, '');
                                   window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`, '_blank');
                                   setRescheduleNotifId(null);
@@ -2474,6 +2630,7 @@ export default function App() {
               setCandidateMessages={setCandidateMessages}
               selectedCandidateId={selectedCandidateId}
               onBackToAdmin={() => setActivePortal('admin')}
+              onLogout={handleCandidateLogout}
             />
           </div>
         )}
