@@ -29,6 +29,7 @@ export interface Candidate {
   resume_url?: string;
   source: string;
   created_at: string;
+  magic_code?: string;
 }
 
 export interface Application {

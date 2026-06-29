@@ -56,6 +56,15 @@ export default function App() {
     }
   };
 
+  const generateMagicCode = (): string => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let result = '';
+    for (let i = 0; i < 6; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  };
+
   // XSS Sanitization helper
   const sanitizeInput = (text: string): string => {
     if (!text) return '';
@@ -135,32 +144,36 @@ export default function App() {
     }
   };
 
-  const fetchCandidatePortalData = async (candidateId: string) => {
-    if (!isSupabaseConfigured() || !candidateId) return;
+  const fetchCandidatePortalData = async (identifier: string) => {
+    if (!isSupabaseConfigured() || !identifier) return;
     setDbLoading(true);
     try {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      const cleanCandidateId = candidateId.trim();
-      
-      if (!uuidRegex.test(cleanCandidateId)) {
-        console.warn('Invalid UUID format for candidate lookup:', cleanCandidateId);
-        setCandidates([]);
-        setApplications([]);
-        setInterviews([]);
-        return;
+      const cleanIdentifier = identifier.trim();
+      const isUuid = uuidRegex.test(cleanIdentifier);
+
+      let query = supabase.from('candidates').select('*');
+      if (isUuid) {
+        query = query.eq('id', cleanIdentifier);
+      } else {
+        query = query.eq('magic_code', cleanIdentifier);
       }
 
-      // Safe SELECT query without active login (Anonymous Access Bypass)
-      const { data: candData, error: candErr } = await supabase
-        .from('candidates')
-        .select('*')
-        .eq('id', cleanCandidateId);
+      let { data: candData, error: candErr } = await query;
+      
+      if (!isUuid && (!candData || candData.length === 0)) {
+        const retry = await supabase.from('candidates').select('*').eq('id', cleanIdentifier);
+        if (!retry.error && retry.data && retry.data.length > 0) {
+          candData = retry.data;
+        }
+      }
       
       if (candErr) throw candErr;
       
       if (candData && candData.length > 0) {
         setCandidates(candData);
         const fetchedCandidate = candData[0];
+        setSelectedCandidateId(fetchedCandidate.id);
 
         const { data: appsData, error: appsErr } = await supabase
           .from('applications')
@@ -220,17 +233,22 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const candIdFromUrl = params.get('candidate_id');
-    if (candIdFromUrl) {
+    const magicCodeFromUrl = params.get('c');
+    const activeIdentifier = magicCodeFromUrl || candIdFromUrl;
+
+    if (activeIdentifier) {
       setActivePortal('candidate');
-      setSelectedCandidateId(candIdFromUrl);
-      fetchCandidatePortalData(candIdFromUrl);
+      if (candIdFromUrl) {
+        setSelectedCandidateId(candIdFromUrl);
+      }
+      fetchCandidatePortalData(activeIdentifier);
     }
 
     if (isSupabaseConfigured()) {
       supabase.auth.getSession().then(({ data: { session } }) => {
         setUser(session?.user ?? null);
         setAuthLoading(false);
-        if (session?.user && !candIdFromUrl) {
+        if (session?.user && !activeIdentifier) {
           fetchAllData();
         }
       });
@@ -238,7 +256,7 @@ export default function App() {
       const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
         setUser(session?.user ?? null);
         setAuthLoading(false);
-        if (session?.user && !candIdFromUrl) {
+        if (session?.user && !activeIdentifier) {
           fetchAllData(true);
         }
       });
@@ -246,7 +264,7 @@ export default function App() {
       return () => subscription.unsubscribe();
     } else {
       setAuthLoading(false);
-      if (!candIdFromUrl) {
+      if (!activeIdentifier) {
         fetchAllData();
       }
     }
@@ -292,6 +310,23 @@ export default function App() {
   const [isAddCandidateOpen, setIsAddCandidateOpen] = useState(false);
   const [isScheduleInterviewOpen, setIsScheduleInterviewOpen] = useState(false);
   const [isAddEvaluationOpen, setIsAddEvaluationOpen] = useState(false);
+  
+  // Edit forms states
+  const [isEditJobOpen, setIsEditJobOpen] = useState(false);
+  const [editingJob, setEditingJob] = useState<Job | null>(null);
+  const [editJobTitle, setEditJobTitle] = useState('');
+  const [editJobDepartment, setEditJobDepartment] = useState('الهندسة والتقنية');
+  const [editJobLocation, setEditJobLocation] = useState('الرياض (حضوري)');
+  const [editJobType, setEditJobType] = useState<'Full-time' | 'Part-time' | 'Remote'>('Full-time');
+  const [editJobDescription, setEditJobDescription] = useState('');
+  const [editJobStatus, setEditJobStatus] = useState<'Active' | 'Closed' | 'Draft'>('Active');
+
+  const [isEditCandidateOpen, setIsEditCandidateOpen] = useState(false);
+  const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null);
+  const [editCandidateName, setEditCandidateName] = useState('');
+  const [editCandidatePhone, setEditCandidatePhone] = useState('');
+  const [editCandidateResumeUrl, setEditCandidateResumeUrl] = useState('');
+  const [editCandidateSource, setEditCandidateSource] = useState('LinkedIn');
   
   // Form fields: Job
   const [newJobTitle, setNewJobTitle] = useState('');
@@ -606,6 +641,36 @@ export default function App() {
     setIsAddEvaluationOpen(false);
   };
 
+  const handleOpenEditJob = (job: Job) => {
+    setEditingJob(job);
+    setEditJobTitle(job.title);
+    setEditJobDepartment(job.department || 'الهندسة والتقنية');
+    setEditJobLocation(job.location || 'الرياض (حضوري)');
+    setEditJobType(job.type || 'Full-time');
+    setEditJobDescription(job.description || '');
+    setEditJobStatus(job.status || 'Active');
+    setIsEditJobOpen(true);
+  };
+
+  const handleCloseEditJob = () => {
+    setIsEditJobOpen(false);
+    setEditingJob(null);
+  };
+
+  const handleOpenEditCandidate = (cand: Candidate) => {
+    setEditingCandidate(cand);
+    setEditCandidateName(cand.name);
+    setEditCandidatePhone(cand.phone);
+    setEditCandidateResumeUrl(cand.resume_url || '');
+    setEditCandidateSource(cand.source || 'LinkedIn');
+    setIsEditCandidateOpen(true);
+  };
+
+  const handleCloseEditCandidate = () => {
+    setIsEditCandidateOpen(false);
+    setEditingCandidate(null);
+  };
+
   // --- ACTIONS ---
 
   // Create Job
@@ -664,6 +729,7 @@ export default function App() {
     const sanitizedResumeUrl = sanitizeInput(newCandidateResumeUrl.trim());
     const trimmedPhone = sanitizedPhone;
     const cId = generateUUID();
+    const mCode = generateMagicCode();
     
     const newCand: Candidate = {
       id: cId,
@@ -671,7 +737,8 @@ export default function App() {
       phone: trimmedPhone,
       resume_url: sanitizedResumeUrl || undefined,
       source: newCandidateSource,
-      created_at: new Date().toISOString().split('T')[0]
+      created_at: new Date().toISOString().split('T')[0],
+      magic_code: mCode
     };
     
     // Auto-create application
@@ -767,7 +834,8 @@ export default function App() {
           const supabaseCandPayload = {
             name: sanitizedName,
             phone: trimmedPhone,
-            resume_url: sanitizedResumeUrl || null
+            resume_url: sanitizedResumeUrl || null,
+            magic_code: mCode
           };
 
           const { data: insertedCands, error: candErr } = await supabase
@@ -850,6 +918,79 @@ export default function App() {
     }
 
     handleCloseAddCandidate();
+  };
+
+  // Update Job
+  const handleUpdateJob = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingJob) return;
+
+    const sanitizedTitle = sanitizeInput(editJobTitle.trim());
+    const sanitizedDept = sanitizeInput(editJobDepartment.trim());
+    const sanitizedLoc = sanitizeInput(editJobLocation.trim());
+    const sanitizedDesc = sanitizeInput(editJobDescription.trim());
+
+    const updatedJob: Job = {
+      ...editingJob,
+      title: sanitizedTitle,
+      department: sanitizedDept,
+      location: sanitizedLoc,
+      type: editJobType,
+      status: editJobStatus,
+      description: sanitizedDesc || 'لا يوجد وصف متاح حالياً.',
+    };
+
+    if (isSupabaseConfigured()) {
+      const { id, created_at, ...supabasePayload } = updatedJob;
+      const { error } = await supabase
+        .from('jobs')
+        .update(supabasePayload)
+        .eq('id', editingJob.id);
+
+      if (error) {
+        showToast(`فشل تحديث بيانات الوظيفة: ${error.message}`, 'error');
+        return;
+      }
+    }
+
+    setJobs(prev => prev.map(j => j.id === editingJob.id ? updatedJob : j));
+    showToast('تم تحديث البيانات بنجاح ✅', 'success');
+    handleCloseEditJob();
+  };
+
+  // Update Candidate
+  const handleUpdateCandidate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCandidate) return;
+
+    const sanitizedName = sanitizeInput(editCandidateName.trim());
+    const sanitizedPhone = sanitizeInput(editCandidatePhone.trim());
+    const sanitizedResumeUrl = sanitizeInput(editCandidateResumeUrl.trim());
+
+    const updatedCandidate: Candidate = {
+      ...editingCandidate,
+      name: sanitizedName,
+      phone: sanitizedPhone,
+      resume_url: sanitizedResumeUrl || undefined,
+      source: editCandidateSource,
+    };
+
+    if (isSupabaseConfigured()) {
+      const { id, created_at, ...supabasePayload } = updatedCandidate;
+      const { error } = await supabase
+        .from('candidates')
+        .update(supabasePayload)
+        .eq('id', editingCandidate.id);
+
+      if (error) {
+        showToast(`فشل تحديث بيانات المرشح: ${error.message}`, 'error');
+        return;
+      }
+    }
+
+    setCandidates(prev => prev.map(c => c.id === editingCandidate.id ? updatedCandidate : c));
+    showToast('تم تحديث البيانات بنجاح ✅', 'success');
+    handleCloseEditCandidate();
   };
 
   // Schedule Interview
@@ -1050,7 +1191,7 @@ export default function App() {
     const job = jobs.find(j => j.id === app?.job_id);
 
     if (candidate) {
-      const customPortalLink = `${window.location.origin}/?candidate_id=${candidate.id}`;
+      const customPortalLink = `https://hr-job.vercel.app/?c=${candidate.magic_code || candidate.id}`;
       const jobTitle = job?.title || 'الوظيفة';
       const timeStr = `${interview.date} - ${interview.time}`;
       const message = renderWhatsAppMessage('invite', candidate.name, jobTitle, timeStr, customPortalLink);
@@ -1774,13 +1915,22 @@ export default function App() {
 
                             <div className="flex items-center justify-between border-t border-slate-100 pt-3">
                               <span className="text-xs font-bold text-slate-700">{appCount} مرشحين مهتمين</span>
-                              <button 
-                                onClick={() => handleDeleteJob(job.id)}
-                                className="p-2 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 opacity-0 group-hover:opacity-100 transition-all duration-200"
-                                title="حذف الوظيفة"
-                              >
-                                <Trash className="w-4 h-4" />
-                              </button>
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200">
+                                <button 
+                                  onClick={() => handleOpenEditJob(job)}
+                                  className="p-2 text-slate-400 hover:text-amber-600 rounded-lg hover:bg-amber-50"
+                                  title="تعديل الوظيفة"
+                                >
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+                                <button 
+                                  onClick={() => handleDeleteJob(job.id)}
+                                  className="p-2 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50"
+                                  title="حذف الوظيفة"
+                                >
+                                  <Trash className="w-4 h-4" />
+                                </button>
+                              </div>
                             </div>
                           </div>
                         );
@@ -1930,7 +2080,7 @@ export default function App() {
                                     <div className="flex items-center justify-end gap-1">
                                       <button 
                                         onClick={() => {
-                                          const customPortalLink = `${window.location.origin}/?candidate_id=${candidate.id}`;
+                                          const customPortalLink = `https://hr-job.vercel.app/?c=${candidate.magic_code || candidate.id}`;
                                           const jobTitle = targetJob?.title || 'الوظيفة';
                                           const message = renderWhatsAppMessage('invite', candidate.name, jobTitle, 'غداً الساعة 10:00 ص', customPortalLink);
                                           const cleanPhone = candidate.phone.replace(/[\s+()-]/g, '');
@@ -1952,6 +2102,13 @@ export default function App() {
                                         title="معاينة كمرشح"
                                       >
                                         <Smartphone className="w-4 h-4" />
+                                      </button>
+                                      <button 
+                                        onClick={() => handleOpenEditCandidate(candidate)}
+                                        className="p-1.5 hover:bg-amber-50 hover:text-amber-700 text-slate-400 rounded-lg transition-colors duration-150"
+                                        title="تعديل المرشح"
+                                      >
+                                        <Edit3 className="w-4 h-4" />
                                       </button>
                                       <button 
                                         onClick={() => handleDeleteCandidate(candidate.id)}
@@ -2104,7 +2261,7 @@ export default function App() {
                             {rescheduleNotifId === interview.id && (
                               <button
                                 onClick={() => {
-                                  const customPortalLink = `${window.location.origin}/?candidate_id=${candidate.id}`;
+                                  const customPortalLink = `https://hr-job.vercel.app/?c=${candidate.magic_code || candidate.id}`;
                                   const jobTitle = job?.title || 'الوظيفة';
                                   const timeStr = `${interview.date} في تمام الساعة ${interview.time}`;
                                   const message = renderWhatsAppMessage('reschedule', candidate.name, jobTitle, timeStr, customPortalLink);
@@ -2788,6 +2945,200 @@ export default function App() {
                   className="w-full py-2.5 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl transition-colors duration-155"
                 >
                   حفظ وتأكيد الملف
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* 1.5 EDIT JOB MODAL */}
+      <AnimatePresence>
+        {isEditJobOpen && editingJob && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white/90 backdrop-blur-md rounded-[2.5rem] p-6 max-w-lg w-full shadow-2xl border border-slate-200/80 text-right"
+            >
+              <div className="flex justify-between items-center mb-6 pb-2 border-b border-slate-100">
+                <h4 className="text-base font-bold text-slate-800">تعديل وظيفة شاغرة</h4>
+                <button 
+                  onClick={handleCloseEditJob}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleUpdateJob} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 block mb-1">المسمى الوظيفي</label>
+                  <input 
+                    type="text" 
+                    required
+                    placeholder="مثال: مطور بايثون أول"
+                    value={editJobTitle}
+                    onChange={(e) => setEditJobTitle(e.target.value)}
+                    className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-amber-500 text-right"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 block mb-1">القسم</label>
+                    <select 
+                      value={editJobDepartment}
+                      onChange={(e) => setEditJobDepartment(e.target.value)}
+                      className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-amber-500 text-right"
+                    >
+                      <option value="الهندسة والتقنية">الهندسة والتقنية</option>
+                      <option value="إدارة المنتجات">إدارة المنتجات</option>
+                      <option value="البيانات والذكاء الاصطناعي">البيانات والذكاء الاصطناعي</option>
+                      <option value="الموارد البشرية">الموارد البشرية</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 block mb-1">الموقع والنمط</label>
+                    <select 
+                      value={editJobLocation}
+                      onChange={(e) => setEditJobLocation(e.target.value)}
+                      className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-amber-500 text-right"
+                    >
+                      <option value="الرياض (حضوري)">الرياض (حضوري)</option>
+                      <option value="الرياض (هجين)">الرياض (هجين)</option>
+                      <option value="جدة (حضوري)">جدة (حضوري)</option>
+                      <option value="عن بعد">عن بعد</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 block mb-1">نوع الدوام</label>
+                    <select 
+                      value={editJobType}
+                      onChange={(e) => setEditJobType(e.target.value as any)}
+                      className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-amber-500 text-right"
+                    >
+                      <option value="Full-time">دوام كامل (Full-time)</option>
+                      <option value="Part-time">دوام جزئي (Part-time)</option>
+                      <option value="Remote">عن بعد (Remote)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 block mb-1">حالة الوظيفة</label>
+                    <select 
+                      value={editJobStatus}
+                      onChange={(e) => setEditJobStatus(e.target.value as any)}
+                      className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-amber-500 text-right"
+                    >
+                      <option value="Active">نشط (Active)</option>
+                      <option value="Closed">مغلق (Closed)</option>
+                      <option value="Draft">مسودة (Draft)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-500 block mb-1">الوصف العام والشروط</label>
+                  <textarea 
+                    rows={4}
+                    value={editJobDescription}
+                    onChange={(e) => setEditJobDescription(e.target.value)}
+                    placeholder="اكتب هنا المتطلبات الأساسية والوصف الوظيفي بشكل مقتضب ورشيق..."
+                    className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-amber-500 text-right"
+                  />
+                </div>
+
+                <button 
+                  type="submit"
+                  className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-colors duration-155"
+                >
+                  تحديث بيانات الوظيفة
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* 2.5 EDIT CANDIDATE MODAL */}
+      <AnimatePresence>
+        {isEditCandidateOpen && editingCandidate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white/90 backdrop-blur-md rounded-[2.5rem] p-6 max-w-lg w-full shadow-2xl border border-slate-200/80 text-right"
+            >
+              <div className="flex justify-between items-center mb-6 pb-2 border-b border-slate-100">
+                <h4 className="text-base font-bold text-slate-800">تعديل بيانات المرشح</h4>
+                <button 
+                  onClick={handleCloseEditCandidate}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleUpdateCandidate} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 block mb-1">الاسم الكامل للمرشح</label>
+                  <input 
+                    type="text" 
+                    required
+                    placeholder="مثال: سلمان فهد الحربي"
+                    value={editCandidateName}
+                    onChange={(e) => setEditCandidateName(e.target.value)}
+                    className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-amber-500 text-right"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-500 block mb-1">رقم الجوال (واتساب)</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={editCandidatePhone}
+                    onChange={(e) => setEditCandidatePhone(e.target.value)}
+                    className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-amber-500 text-right font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-500 block mb-1">رابط السيرة الذاتية (Resume URL)</label>
+                  <input 
+                    type="url" 
+                    placeholder="مثال: https://applywell.pro/resumes/sara.pdf"
+                    value={editCandidateResumeUrl}
+                    onChange={(e) => setEditCandidateResumeUrl(e.target.value)}
+                    className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-amber-500 text-right"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-500 block mb-1">مصدر الاستقطاب</label>
+                  <select 
+                    value={editCandidateSource}
+                    onChange={(e) => setEditCandidateSource(e.target.value)}
+                    className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-amber-500 text-right"
+                  >
+                    {sources.map(src => (
+                      <option key={src} value={src}>{src}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <button 
+                  type="submit"
+                  className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-colors duration-155"
+                >
+                  تحديث بيانات المرشح
                 </button>
               </form>
             </motion.div>
