@@ -173,10 +173,10 @@ export default function CandidatePortalSimulator({
   };
 
   const getQueuePosition = () => {
-    const waitingInts = interviews.filter(i => i.waiting_room_status === 'Waiting');
+    const waitingInts = interviews?.filter(i => i?.waiting_room_status === 'Waiting') || [];
     const index = waitingInts.findIndex(i => i.application_id === app?.id);
     if (index !== -1) return index + 1;
-    return interview?.waiting_room_status === 'In Progress' ? 0 : waitingInts.length + 1;
+    return interview?.waiting_room_status === 'In Progress' ? 0 : waitingInts?.length + 1;
   };
 
   const getWaitTime = () => {
@@ -460,10 +460,10 @@ export default function CandidatePortalSimulator({
           
           {/* CHAT MESSAGES PANEL */}
           <div className="p-4 h-[220px] overflow-y-auto space-y-3 bg-slate-50/50">
-            {(candidateMessages[candidate.id] || []).length === 0 ? (
+            {(candidateMessages?.[candidate?.id] || []).length === 0 ? (
               <p className="text-center text-[10px] text-slate-400 py-12">ابدأ المحادثة مع المساعد الآلي لطرح أي استفسار بخصوص مقابلتك.</p>
             ) : (
-              (candidateMessages[candidate.id] || []).map((msg, index) => (
+              (candidateMessages?.[candidate?.id] || []).map((msg, index) => (
                 <div 
                   key={index}
                   className={`flex flex-col max-w-[85%] rounded-2xl p-3 text-xs leading-relaxed ${

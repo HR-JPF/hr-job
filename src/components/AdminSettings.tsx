@@ -34,13 +34,13 @@ export default function AdminSettings({
   const handleAddSource = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSource.trim()) return;
-    if (sources.includes(newSource.trim())) return;
-    setSources([...sources, newSource.trim()]);
+    if (sources?.includes(newSource.trim())) return;
+    setSources([...(sources || []), newSource.trim()]);
     setNewSource('');
   };
 
   const handleRemoveSource = (sourceToRemove: string) => {
-    setSources(sources.filter(s => s !== sourceToRemove));
+    setSources((sources || []).filter(s => s !== sourceToRemove));
   };
 
   const handleSaveTemplates = () => {
@@ -74,7 +74,7 @@ export default function AdminSettings({
 
             {/* Current sources list */}
             <div className="flex flex-wrap gap-2 mb-4">
-              {sources.map((source, index) => (
+              {sources?.map((source, index) => (
                 <span 
                   key={index}
                   className="bg-sky-50 text-sky-800 text-xs font-semibold px-3 py-1.5 rounded-xl border border-sky-100 flex items-center gap-1.5"

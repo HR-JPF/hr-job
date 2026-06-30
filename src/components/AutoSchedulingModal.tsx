@@ -43,12 +43,12 @@ export default function AutoSchedulingModal({
 
   // Find candidates that do NOT have any scheduled interview and are linked to active jobs
   const getUnscheduledCandidates = () => {
-    return candidates.filter(cand => {
-      const app = applications.find(a => a.candidate_id === cand.id);
+    return candidates?.filter(cand => {
+      const app = applications?.find(a => a.candidate_id === cand.id);
       if (!app) return false;
       
       // Must be linked to a valid and active job
-      const job = jobs.find(j => j.id === app.job_id);
+      const job = jobs?.find(j => j.id === app.job_id);
       if (!job || job.status !== 'Active') return false;
 
       // Initial status must be eligible for scheduling (New, Screening, or Interviewing)
@@ -56,16 +56,16 @@ export default function AutoSchedulingModal({
       if (!allowedStatuses.includes(app.status)) return false;
 
       // Skip if candidate already has a scheduled or completed interview
-      const hasInterview = interviews.some(i => i.application_id === app.id && (i.status === 'Scheduled' || i.status === 'Completed'));
+      const hasInterview = interviews?.some(i => i.application_id === app.id && (i.status === 'Scheduled' || i.status === 'Completed'));
       return !hasInterview;
-    });
+    }) || [];
   };
 
   const unscheduled = getUnscheduledCandidates();
 
   // Generate Slots
   const handleGeneratePreview = () => {
-    if (unscheduled.length === 0) {
+    if (unscheduled?.length === 0) {
       alert('جميع المرشحين لديهم مقابلات مجدولة بالفعل!');
       return;
     }

@@ -33,6 +33,9 @@ export default function App() {
   const [interviews, setInterviews] = useState<Interview[]>([]);
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
 
+  // --- RESILIENT UI ERROR STATE ---
+  const [error, setError] = useState<string | null>(null);
+
   // --- SUPABASE & TOAST REAL-TIME SYNC ---
   const [dbLoading, setDbLoading] = useState<boolean>(false);
   const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'error' | 'info' | 'warning' }[]>([]);
@@ -77,6 +80,9 @@ export default function App() {
     }
     if (!silent) setDbLoading(true);
     try {
+      // Clear previous error
+      setError(null);
+
       // 1. Fetch profiles
       const { data: profilesData, error: profilesErr } = await supabase
         .from('profiles')
@@ -133,11 +139,12 @@ export default function App() {
       if (evaluationsData) setEvaluations(evaluationsData);
 
       showToast('تم مزامنة البيانات الحية مع قاعدة Supabase بنجاح! 🔄', 'success');
-    } catch (error: any) {
-      console.error('Error fetching from Supabase:', error);
+    } catch (err: any) {
+      console.error('Error fetching from Supabase:', err);
+      setError(err.message || 'فشل الاتصال بقاعدة البيانات');
       // Only show error toast if we actually have an active user to avoid annoying toasts on the login screen
       if (user) {
-        showToast(`تنبيه: فشل جلب البيانات الحية: ${error.message}`, 'error');
+        showToast(`تنبيه: فشل جلب البيانات الحية: ${err.message}`, 'error');
       }
     } finally {
       if (!silent) setDbLoading(false);
@@ -148,6 +155,7 @@ export default function App() {
     if (!isSupabaseConfigured() || !identifier) return;
     setDbLoading(true);
     try {
+      setError(null);
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const cleanIdentifier = identifier.trim();
       const isUuid = uuidRegex.test(cleanIdentifier);
@@ -161,16 +169,16 @@ export default function App() {
 
       let { data: candData, error: candErr } = await query;
       
-      if (!isUuid && (!candData || candData.length === 0)) {
+      if (!isUuid && (!candData || candData?.length === 0)) {
         const retry = await supabase.from('candidates').select('*').eq('id', cleanIdentifier);
-        if (!retry.error && retry.data && retry.data.length > 0) {
+        if (!retry.error && retry.data && retry.data?.length > 0) {
           candData = retry.data;
         }
       }
       
       if (candErr) throw candErr;
       
-      if (candData && candData.length > 0) {
+      if (candData && candData?.length > 0) {
         setCandidates(candData);
         const fetchedCandidate = candData[0];
         setSelectedCandidateId(fetchedCandidate.id);
@@ -182,17 +190,17 @@ export default function App() {
         
         if (appsErr) throw appsErr;
         
-        if (appsData && appsData.length > 0) {
-          const mappedApps = appsData.map((app: any) => ({
+        if (appsData && appsData?.length > 0) {
+          const mappedApps = appsData?.map((app: any) => ({
             ...app,
             applied_date: app.created_at || app.applied_date || new Date().toISOString().split('T')[0]
           }));
           setApplications(mappedApps);
 
-          const jobIds = appsData.map((a: any) => a.job_id).filter(Boolean);
-          const appIds = appsData.map((a: any) => a.id).filter(Boolean);
+          const jobIds = appsData?.map((a: any) => a.job_id)?.filter(Boolean);
+          const appIds = appsData?.map((a: any) => a.id)?.filter(Boolean);
 
-          if (jobIds.length > 0) {
+          if (jobIds?.length > 0) {
             const { data: jobsData, error: jobsErr } = await supabase
               .from('jobs')
               .select('*')
@@ -201,7 +209,7 @@ export default function App() {
             if (jobsData) setJobs(jobsData);
           }
 
-          if (appIds.length > 0) {
+          if (appIds?.length > 0) {
             const { data: intsData, error: intsErr } = await supabase
               .from('interviews')
               .select('*')
@@ -215,9 +223,10 @@ export default function App() {
       } else {
         setCandidates([]);
       }
-    } catch (error: any) {
-      console.error('Error in candidate portal lookup:', error);
-      showToast(`فشل تحميل بيانات بوابة المرشح: ${error.message}`, 'error');
+    } catch (err: any) {
+      console.error('Error in candidate portal lookup:', err);
+      setError(err.message || 'فشل تحميل بيانات بوابة المرشح');
+      showToast(`فشل تحميل بيانات بوابة المرشح: ${err.message}`, 'error');
     } finally {
       setDbLoading(false);
     }
@@ -1466,19 +1475,49 @@ export default function App() {
 
       {/* PORTAL RENDER LOGIC */}
       <div className="flex-1 flex overflow-hidden">
-        
-        {/* ========================================================================= */}
-        {/* =============== ADMIN CONSOLE PORTAL =============== */}
-        {/* ========================================================================= */}
-        {activePortal === 'admin' && (
-          authLoading ? (
-            <div className="flex-1 flex items-center justify-center p-6 bg-slate-50 min-h-[80vh] w-full">
-              <div className="flex flex-col items-center gap-3">
-                <RefreshCw className="w-8 h-8 text-sky-600 animate-spin" />
-                <p className="text-xs font-bold text-slate-500">جاري التحقق من الهوية...</p>
+        {error ? (
+          <div className="flex-1 flex items-center justify-center p-6 bg-slate-100/50 min-h-[80vh] w-full backdrop-blur-md">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white/80 backdrop-blur-lg rounded-[2.5rem] p-8 max-w-lg w-full shadow-2xl border border-rose-100/80 text-center relative overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-rose-400 to-rose-600" />
+              <div className="w-16 h-16 bg-rose-50 rounded-3xl flex items-center justify-center mx-auto text-rose-600 mb-5 border border-rose-100 shadow-inner">
+                <AlertCircle className="w-8 h-8 text-rose-500 animate-pulse" />
               </div>
-            </div>
-          ) : !user ? (
+              <h3 className="text-xl font-extrabold text-slate-800 mb-2">نواجه حالياً صعوبة في الاتصال بقاعدة البيانات</h3>
+              <p className="text-xs text-slate-500 mb-6 leading-relaxed">
+                لا تقلق، بياناتك آمنة تماماً. يرجى المحاولة بعد قليل أو النقر على زر إعادة المحاولة لاسترجاع الاتصال مع خوادم Supabase الحية.
+                {error && (
+                  <span className="block mt-4 font-mono text-[10px] bg-rose-50 text-rose-700/80 p-3 rounded-2xl border border-rose-100/50 text-right overflow-x-auto ltr">
+                    <strong>تفاصيل الخطأ:</strong> {error}
+                  </span>
+                )}
+              </p>
+              <button 
+                onClick={() => fetchAllData(false)}
+                className="px-6 py-3.5 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl shadow-lg shadow-sky-600/20 hover:shadow-sky-600/35 transition-all duration-200 flex items-center justify-center gap-2 mx-auto cursor-pointer active:scale-95"
+              >
+                <RefreshCw className="w-4 h-4" />
+                إعادة المحاولة والربط الفوري 🔄
+              </button>
+            </motion.div>
+          </div>
+        ) : (
+          <>
+            {/* ========================================================================= */}
+            {/* =============== ADMIN CONSOLE PORTAL =============== */}
+            {/* ========================================================================= */}
+            {activePortal === 'admin' && (
+              authLoading ? (
+                <div className="flex-1 flex items-center justify-center p-6 bg-slate-50 min-h-[80vh] w-full">
+                  <div className="flex flex-col items-center gap-3">
+                    <RefreshCw className="w-8 h-8 text-sky-600 animate-spin" />
+                    <p className="text-xs font-bold text-slate-500">جاري التحقق من الهوية...</p>
+                  </div>
+                </div>
+              ) : !user ? (
             <div className="flex-1 flex items-center justify-center p-6 bg-slate-50 min-h-[80vh] w-full">
               <motion.div 
                 initial={{ scale: 0.95, opacity: 0 }}
@@ -1653,7 +1692,7 @@ export default function App() {
                   }`}
                 >
                   <Briefcase className="w-4.5 h-4.5 text-sky-600" />
-                  <span>إدارة الوظائف ({jobs.length})</span>
+                  <span>إدارة الوظائف ({jobs?.length || 0})</span>
                 </button>
 
                 <button
@@ -1666,7 +1705,7 @@ export default function App() {
                   }`}
                 >
                   <Users className="w-4.5 h-4.5 text-sky-600" />
-                  <span>المرشحون الأساسيون ({candidates.length})</span>
+                  <span>المرشحون الأساسيون ({candidates?.length || 0})</span>
                 </button>
 
                 <button
@@ -1679,7 +1718,7 @@ export default function App() {
                   }`}
                 >
                   <Video className="w-4.5 h-4.5 text-sky-600" />
-                  <span>ساحة الانتظار الرقمية ({interviews.filter(i => i.waiting_room_status !== 'Finished').length})</span>
+                  <span>ساحة الانتظار الرقمية ({interviews?.filter(i => i.waiting_room_status !== 'Finished')?.length || 0})</span>
                 </button>
 
                 <button
@@ -1692,7 +1731,7 @@ export default function App() {
                   }`}
                 >
                   <Award className="w-4.5 h-4.5 text-sky-600" />
-                  <span>تقييمات المقابلات ({evaluations.length})</span>
+                  <span>تقييمات المقابلات ({evaluations?.length || 0})</span>
                 </button>
 
                 <button
@@ -1802,7 +1841,7 @@ export default function App() {
                         <div className="p-1.5 bg-sky-50 rounded-lg"><Briefcase className="w-4 h-4 text-sky-600" /></div>
                       </div>
                       <div className="flex justify-between items-end">
-                        <h3 className="text-3xl font-extrabold text-slate-800">{jobs.filter(j => j.status === 'Active').length}</h3>
+                        <h3 className="text-3xl font-extrabold text-slate-800">{jobs?.filter(j => j?.status === 'Active')?.length || 0}</h3>
                         <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-bold">+2 هذا الأسبوع</span>
                       </div>
                     </div>
@@ -1813,8 +1852,8 @@ export default function App() {
                         <div className="p-1.5 bg-indigo-50 rounded-lg"><Users className="w-4 h-4 text-indigo-600" /></div>
                       </div>
                       <div className="flex justify-between items-end">
-                        <h3 className="text-3xl font-extrabold text-slate-800">{candidates.length}</h3>
-                        <span className="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full font-bold">{applications.filter(a => a.status === 'New').length} تقديم جديد</span>
+                        <h3 className="text-3xl font-extrabold text-slate-800">{candidates?.length || 0}</h3>
+                        <span className="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full font-bold">{applications?.filter(a => a?.status === 'New')?.length || 0} تقديم جديد</span>
                       </div>
                     </div>
 
@@ -1824,9 +1863,9 @@ export default function App() {
                         <div className="p-1.5 bg-amber-50 rounded-lg"><Video className="w-4 h-4 text-amber-600" /></div>
                       </div>
                       <div className="flex justify-between items-end">
-                        <h3 className="text-3xl font-extrabold text-slate-800">{interviews.length}</h3>
+                        <h3 className="text-3xl font-extrabold text-slate-800">{interviews?.length || 0}</h3>
                         <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-bold">
-                          {interviews.filter(i => i.waiting_room_status === 'Waiting').length} في الانتظار حالياً
+                          {interviews?.filter(i => i?.waiting_room_status === 'Waiting')?.length || 0} في الانتظار حالياً
                         </span>
                       </div>
                     </div>
@@ -2034,10 +2073,10 @@ export default function App() {
                           </button>
                         </div>
                         <div className="space-y-3.5">
-                          {evaluations.slice(0, 3).map(evalItem => {
-                            const interview = interviews.find(i => i.id === evalItem.interview_id);
-                            const app = applications.find(a => a.id === interview?.application_id);
-                            const candidate = candidates.find(c => c.id === app?.candidate_id);
+                          {evaluations?.slice(0, 3)?.map(evalItem => {
+                            const interview = interviews?.find(i => i.id === evalItem.interview_id);
+                            const app = applications?.find(a => a.id === interview?.application_id);
+                            const candidate = candidates?.find(c => c.id === app?.candidate_id);
                             
                             return (
                               <div key={evalItem.id} className="p-3 bg-white/50 rounded-2xl border border-slate-100 text-right">
@@ -2399,7 +2438,7 @@ export default function App() {
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {interviews.map(interview => {
+                      {interviews?.map(interview => {
                         const candidate = resolveCandidate(interview.application_id);
                         const job = resolveJob(interview.application_id);
                         if (!candidate) return null;
@@ -2602,11 +2641,11 @@ export default function App() {
                     
                     {/* EVALUATIONS LIST */}
                     <div className="lg:col-span-2 space-y-4">
-                      {evaluations.map(evaluation => {
-                        const interview = interviews.find(i => i.id === evaluation.interview_id);
-                        const app = applications.find(a => a.id === interview?.application_id);
-                        const candidate = candidates.find(c => c.id === app?.candidate_id);
-                        const job = jobs.find(j => j.id === app?.job_id);
+                      {evaluations?.map(evaluation => {
+                        const interview = interviews?.find(i => i.id === evaluation.interview_id);
+                        const app = applications?.find(a => a.id === interview?.application_id);
+                        const candidate = candidates?.find(c => c.id === app?.candidate_id);
+                        const job = jobs?.find(j => j.id === app?.job_id);
 
                         return (
                           <div key={evaluation.id} className="glass p-6 rounded-3xl border border-slate-200/80 bg-white/60">
@@ -2752,7 +2791,7 @@ export default function App() {
                   onChange={(e) => setSelectedCandidateId(e.target.value)}
                   className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-sky-500 text-right font-medium"
                 >
-                  {candidates.map(c => (
+                  {candidates?.map(c => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
@@ -2996,7 +3035,8 @@ export default function App() {
             </main>
           </div>
         )}
-
+          </>
+        )}
       </div>
 
       {/* ========================================================================= */}
@@ -3440,9 +3480,9 @@ export default function App() {
                     onChange={(e) => setNewIntAppId(e.target.value)}
                     className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-sky-500 text-right"
                   >
-                    {applications.map(app => {
-                      const cand = candidates.find(c => c.id === app.candidate_id);
-                      const j = jobs.find(job => job.id === app.job_id);
+                    {applications?.map(app => {
+                      const cand = candidates?.find(c => c.id === app.candidate_id);
+                      const j = jobs?.find(job => job.id === app.job_id);
                       return (
                         <option key={app.id} value={app.id}>
                           {cand?.name} - {j?.title}
